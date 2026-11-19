@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Álbum de Fotos</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+</head>
+<body class="album-page">
+    <div class="album-container">
+        <div class="album-header">
+            <a href="index.html" class="btn-regresar-album">← Volver</a>
+        </div>
+
+        <div class="album-card">
+            <h1 id="albumTitulo" class="album-titulo">Álbum</h1>
+            <p id="albumInstrucciones" class="album-instrucciones"></p>
+            <label class="btn-subir">
+                <span id="textoSubir">Subir</span>
+                <input type="file" id="photoInput" multiple accept="image/*,video/*" hidden>
+            </label>
+        </div>
+
+        <div id="previewPanel" class="preview-panel" style="display:none;">
+            <h3 class="preview-title">Revisa tu selección</h3>
+            <p class="preview-hint">Desmarca lo que no quieras subir</p>
+            <div id="previewGrid" class="preview-grid"></div>
+            <div class="preview-actions">
+                <button id="btnCancelPreview" class="btn-secundario">Cancelar</button>
+                <button id="btnConfirmUpload" class="btn-primario">Subir seleccionados</button>
+            </div>
+        </div>
+
+        <div id="uploadStatus" class="upload-status" style="display:none;">Subiendo... <span id="uploadProgress">0/0</span></div>
+        <div id="gallery" class="gallery">
+            <p id="emptyMsg" class="empty-msg" style="display:none;"></p>
+        </div>
+    </div>
+
+    <div id="lightbox" class="lightbox" style="display:none;">
+        <button class="lightbox-close" onclick="cerrarLightbox()">✕</button>
+        <div id="lightboxContent"></div>
+        <div class="lightbox-actions">
+            <button class="lightbox-save-btn" id="btnLightboxSave">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+                <span>Guardar</span>
+            </button>
+            <button class="lightbox-delete-btn" id="btnLightboxDelete">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+                <span>Eliminar</span>
+            </button>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script>
+        const { album } = CONFIG;
+        document.getElementById('albumTitulo').textContent = album.titulo;
+        document.getElementById('albumInstrucciones').textContent = album.instrucciones;
+        document.getElementById('textoSubir').textContent = album.textoSubir;
+
+        if (CONFIG.tema.fondos && CONFIG.tema.fondos.album) {
+            document.body.style.background = CONFIG.tema.fondos.album;
+        }
+
+        firebase.initializeApp(album.firebase);
+        const db = firebase.database();
+        const fotosRef = db.ref('fotos');
+
+        let fotoLightboxActual = null;
+        let archivosPendientes = [];
+
+        // =========================================================
+        // 1. SISTEMA DE AUTOR (TOKEN ÚNICO PARA ELIMINAR)
+        // =========================================================
+        function getAuthorToken() {
+            let token = localStorage.getItem('albumAuthorToken');
+            if (!token) {
+                token = Math.random().toString(36).substr(2, 9).toUpperCase();
+                localStorage.setItem('albumAuthorToken', token);
+            }
+            return token;
+        }
+
+        function mostrarTokenAlUsuario(token) {
+            const yaVisto = localStorage.getItem('albumTokenShown');
+            if (!yaVisto) {
+                setTimeout(() => {
+                    alert(`Tu código de autor es: ${token}\n\nGuárdalo (toma una captura). Solo con este código podrás eliminar tus fotos/videos en el futuro.`);
+                    localStorage.setItem('albumTokenShown', 'true');
+                }, 500);
+            }
+        }
+
+        // =========================================================
+        // 2. CARGAR GALERÍA (FILTRANDO ELIMINADOS)
+        // =========================================================
+        fotosRef.orderByChild('fecha').on('value', (snapshot) => {
+            const fotos = [];
+            snapshot.forEach((child) => {
+                const data = child.val();
+                if (!data.deleted) {
+                    fotos.unshift({ id: child.key, ...data });
+                }
+            });
+            renderGallery(fotos);
+        });
+
+        function getThumbnailUrl(foto) {
+            if (foto.resourceType === 'video') {
+                return foto.url.replace('/video/upload/', '/video/upload/so_0,du_2,e_preview/').replace(/\.[^.]+$/, '.jpg');
+            }
+            return foto.url;
+        }
+
+        function renderGallery(fotos) {
+            const gallery = document.getElementById('gallery');
+            const emptyMsg = document.getElementById('emptyMsg');
+
+            if (fotos.length === 0) {
+                gallery.innerHTML = '';
+                emptyMsg.textContent = album.textoVacio;
+                emptyMsg.style.display = 'block';
+                gallery.appendChild(emptyMsg);
+                return;
+            }
+
+            gallery.innerHTML = fotos.map((f) => `
+                <div class="photo-card" data-id="${f.id}">
+                    ${f.resourceType === 'video' ? '<div class="video-badge">▶</div>' : ''}
+                    <img src="${getThumbnailUrl(f)}" alt="Media" loading="lazy">
+                    ${f.nombre ? `<div class="photo-author">${f.nombre}</div>` : ''}
+                </div>
+            `).join('');
+
+            document.querySelectorAll('.photo-card').forEach(card => {
+                card.addEventListener('click', () => {
+                    const id = card.dataset.id;
+                    const foto = fotos.find(f => f.id === id);
+                    if (foto) abrirLightbox(foto);
+                });
+            });
+        }
+
+        // =========================================================
+        // 3. PREVIEW Y SUBIDA
+        // =========================================================
+        document.getElementById('photoInput').addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            if (files.length === 0) return;
+
+            archivosPendientes = files.map(file => ({
+                file,
+                selected: true,
+                url: URL.createObjectURL(file),
+                type: file.type.startsWith('video') ? 'video' : 'image'
+            }));
+
+            renderPreview();
+            document.getElementById('previewPanel').style.display = 'block';
+            e.target.value = '';
+        });
+
+        function renderPreview() {
+            const grid = document.getElementById('previewGrid');
+            grid.innerHTML = archivosPendientes.map((item, i) => `
+                <div class="preview-item ${item.selected ? 'selected' : 'deselected'}">
+                    <label class="preview-checkbox">
+                        <input type="checkbox" ${item.selected ? 'checked' : ''} data-index="${i}">
+                        <span class="checkmark">✓</span>
+                    </label>
+                    ${item.type === 'video' ? '<div class="video-badge">▶</div>' : ''}
+                    <img src="${item.url}" alt="Preview">
+                </div>
+            `).join('');
+
+            grid.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                cb.addEventListener('change', (e) => {
+                    const idx = parseInt(e.target.dataset.index);
+                    archivosPendientes[idx].selected = e.target.checked;
+                    e.target.closest('.preview-item').classList.toggle('selected', e.target.checked);
+                    e.target.closest('.preview-item').classList.toggle('deselected', !e.target.checked);
+                });
+            });
+        }
+
+        document.getElementById('btnCancelPreview').addEventListener('click', () => {
+            document.getElementById('previewPanel').style.display = 'none';
+            archivosPendientes.forEach(item => URL.revokeObjectURL(item.url));
+            archivosPendientes = [];
+        });
+
+        document.getElementById('btnConfirmUpload').addEventListener('click', async () => {
+            const seleccionados = archivosPendientes.filter(a => a.selected);
+            if (seleccionados.length === 0) {
+                alert('Selecciona al menos un archivo para subir.');
+                return;
+            }
+
+            const archivosValidos = [];
+            for (const item of seleccionados) {
+                if (item.type === 'video') {
+                    const duracion = await obtenerDuracionVideo(item.file);
+                    if (duracion > 15) {
+                        alert(`El video "${item.file.name}" dura ${Math.ceil(duracion)}s. El máximo es 15 segundos.`);
+                    } else {
+                        archivosValidos.push(item);
+                    }
+                } else {
+                    archivosValidos.push(item);
+                }
+            }
+
+            if (archivosValidos.length === 0) return;
+
+            const nombre = prompt(album.placeholderNombre);
+            if (nombre === null) { 
+                document.getElementById('previewPanel').style.display = 'none';
+                archivosPendientes.forEach(item => URL.revokeObjectURL(item.url));
+                archivosPendientes = [];
+                return;
+            }
+
+            const authorToken = getAuthorToken();
+            mostrarTokenAlUsuario(authorToken);
+
+            document.getElementById('previewPanel').style.display = 'none';
+            const status = document.getElementById('uploadStatus');
+            const progress = document.getElementById('uploadProgress');
+            status.style.display = 'block';
+
+            let exitos = 0;
+            const total = archivosValidos.length;
+
+            for (let i = 0; i < archivosValidos.length; i++) {
+                const item = archivosValidos[i];
+                progress.textContent = `${i + 1}/${total}`;
+
+                try {
+                    const formData = new FormData();
+                    formData.append('file', item.file);
+                    formData.append('upload_preset', album.cloudinary.uploadPreset);
+
+                    const cloudRes = await fetch(
+                        `https://api.cloudinary.com/v1_1/${album.cloudinary.cloudName}/auto/upload`,
+                        { method: 'POST', body: formData }
+                    );
+                    const cloudData = await cloudRes.json();
+
+                    if (!cloudData.secure_url) throw new Error('Fallo en Cloudinary');
+
+                    await fotosRef.push({
+                        url: cloudData.secure_url,
+                        publicId: cloudData.public_id,
+                        resourceType: cloudData.resource_type || item.type,
+                        nombre: (nombre || 'Anónimo').slice(0, 60),
+                        authorToken: authorToken,
+                        fecha: Date.now(),
+                        deleted: false
+                    });
+                    exitos++;
+                } catch (err) {
+                    console.error('Error subiendo:', err);
+                }
+            }
+
+            status.style.display = 'none';
+            archivosPendientes.forEach(item => URL.revokeObjectURL(item.url));
+            archivosPendientes = [];
+
+            if (exitos < total) alert(`Se subieron ${exitos} de ${total} archivos.`);
+        });
+
+        function obtenerDuracionVideo(file) {
+            return new Promise((resolve) => {
+                const video = document.createElement('video');
+                video.preload = 'metadata';
+                video.onloadedmetadata = function() {
+                    window.URL.revokeObjectURL(video.src);
+                    resolve(video.duration);
+                }
+                video.src = URL.createObjectURL(file);
+            });
+        }
+
+        // =========================================================
+        // 4. LIGHTBOX Y ACCIONES
+        // =========================================================
+        function abrirLightbox(foto) {
+            fotoLightboxActual = foto;
+            const content = document.getElementById('lightboxContent');
+
+            if (foto.resourceType === 'video') {
+                content.innerHTML = `<video src="${foto.url}" controls autoplay playsinline style="max-width:100%; max-height:75vh; border-radius:8px;"></video>`;
+            } else {
+                content.innerHTML = `<img src="${foto.url}" alt="Foto" style="max-width:100%; max-height:85vh; border-radius:8px; object-fit:contain;">`;
+            }
+            document.getElementById('lightbox').style.display = 'flex';
+        }
+
+        function cerrarLightbox() {
+            document.getElementById('lightbox').style.display = 'none';
+            document.getElementById('lightboxContent').innerHTML = '';
+            fotoLightboxActual = null;
+        }
+
+        document.getElementById('lightbox').addEventListener('click', (e) => {
+            if (e.target.id === 'lightbox') cerrarLightbox();
+        });
+
+        document.getElementById('btnLightboxSave').addEventListener('click', async () => {
+            if (!fotoLightboxActual) return;
+            try {
+                const response = await fetch(fotoLightboxActual.url, { mode: 'cors' });
+                const blob = await response.blob();
+                const ext = fotoLightboxActual.resourceType === 'video' ? 'mp4' : 'jpg';
+                const uniqueName = `media-${fotoLightboxActual.id}.${ext}`;
+                const file = new File([blob], uniqueName, { type: blob.type });
+
+                if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                    await navigator.share({ files: [file], title: 'Media del evento' });
+                } else {
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = uniqueName;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }
+            } catch (error) {
+                if (error.name !== 'AbortError') alert('Mantén presionada la imagen/video y selecciona "Guardar".');
+            }
+        });
+
+        // =========================================================
+        // 5. SISTEMA DE ELIMINACIÓN (SOLO EL AUTOR)
+        // =========================================================
+        document.getElementById('btnLightboxDelete').addEventListener('click', () => {
+            if (!fotoLightboxActual) return;
+            
+            const tokenIngresado = prompt('Ingresa tu código de autor para eliminar:');
+            if (tokenIngresado === null) return; // Si cancela, no hace nada
+
+            const authorToken = getAuthorToken();
+
+            // Verifica que el código ingresado coincida EXACTAMENTE con el que se guardó al subir
+            if (tokenIngresado.trim().toUpperCase() !== fotoLightboxActual.authorToken) {
+                alert('Código incorrecto. Solo el autor original puede eliminar esta foto/video.');
+                return;
+            }
+
+            if (!confirm('¿Seguro que quieres eliminar esto? Esta acción no se puede deshacer.')) return;
+
+            // Marcamos como eliminado en Firebase (Soft Delete)
+            fotosRef.child(fotoLightboxActual.id).update({ deleted: true })
+                .then(() => { 
+                    alert('Eliminado correctamente.'); 
+                    cerrarLightbox(); 
+                })
+                .catch(err => {
+                    console.error(err);
+                    alert('Error al eliminar. Intenta de nuevo.');
+                });
+        });
+    </script>
+</body>
+</html>
