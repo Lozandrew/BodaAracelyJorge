@@ -3,7 +3,7 @@ const CONFIG = {
     tituloPagina: "Aracely & Jorge | Encuentra tu Mesa",
     titulo: "Aracely & Jorge",
     instrucciones: "Ingresa tu nombre y apellido para conocer tu mesa: ",
-    placeholder: "Ej. Aracely",
+    placeholder: "Ej. Ana Luz Martinez",
     botonBuscar: "Buscar Mesa",
     botonRegresar: "Buscar nuevo invitado",
     bienvenida: "¡Gracias por acompañarnos!",
@@ -24,7 +24,7 @@ const CONFIG = {
     mesasNinos: ["ninos", "niños"],
   },
   datos: {
-    urlInvitados: "https://api.jsonbin.io/v3/b/6ac55961ac6210605a1a5c86/latest",
+    urlInvitados: "https://api.jsonbin.io/v3/b/6b0078bdffd5d16053d1983d/latest",
   },
   tema: {
     colores: {
